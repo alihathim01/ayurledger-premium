@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Plus, Minus, ShoppingCart, Trash2, Search, ScanBarcode, RotateCcw } from 'lucide-react';
@@ -144,55 +144,37 @@ export function POS() {
 
   useEffect(() => {
     if (currentBranch) {
-      fetchProducts();
+      fetchProducts('', mode);
       fetchOpenRecord();
     }
   }, [currentBranch]);
 
-  const fetchProducts = async () => {
+  const fetchProducts = async (search = '', currentMode = mode) => {
     if (!currentBranch) return;
     try {
-      const [inventoryRes, productsRes] = await Promise.all([
-        fetch(`/api/inventory?branchId=${currentBranch.id}`),
-        fetch('/api/products'),
-      ]);
-      const inventoryData = await inventoryRes.json();
-      const productsData = await productsRes.json();
-
-      const inventoryByProductId = new Map<number, InventoryItem>();
-      (inventoryData as InventoryItem[]).forEach((item) => {
-        inventoryByProductId.set(item.product_id, item);
+      const params = new URLSearchParams({
+        branchId: String(currentBranch.id),
+        mode: currentMode,
       });
-
-      const merged = (productsData as Array<{ id: number; name: string; category: string; barcode: string | null; price: number; cost: number; sku: string | null }>)
-        .map((product) => {
-          const existing = inventoryByProductId.get(product.id);
-          if (existing) {
-            return existing;
-          }
-          return {
-            id: 0,
-            product_id: product.id,
-            branch_id: currentBranch.id,
-            branch_name: currentBranch.name,
-            name: product.name,
-            category: product.category,
-            barcode: product.barcode,
-            price: product.price,
-            cost: product.cost,
-            sku: product.sku,
-            mfg_date: null,
-            expiry_date: null,
-            stock_level: 0,
-            reorder_point: 10,
-          } as InventoryItem;
-        });
-
-      setProducts(merged);
+      if (search.trim()) {
+        params.set('q', search.trim());
+      }
+      const res = await fetch(`/api/pos/products?${params.toString()}`);
+      const data = await res.json();
+      setProducts(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to fetch products', error);
     }
   };
+
+  useEffect(() => {
+    if (!currentBranch) return;
+    const timeout = window.setTimeout(() => {
+      fetchProducts(query, mode);
+    }, query.trim() ? 120 : 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [currentBranch, query, mode]);
 
   const fetchOpenRecord = async () => {
     if (!currentBranch) return;
@@ -311,42 +293,7 @@ export function POS() {
   };
 
   const normalizedQuery = query.trim().toLowerCase();
-  const matchedProducts = useMemo(() => {
-    if (!normalizedQuery) {
-      return products
-        .filter((product) => mode === 'return' || product.stock_level > 0)
-        .slice(0, 8);
-    }
-
-    return products
-      .filter((product) => {
-        const sku = (product.sku || '').toLowerCase();
-        const barcode = (product.barcode || '').toLowerCase();
-        const name = product.name.toLowerCase();
-        const category = product.category.toLowerCase();
-        return barcode.includes(normalizedQuery) || sku.includes(normalizedQuery) || name.includes(normalizedQuery) || category.includes(normalizedQuery);
-      })
-      .sort((a, b) => {
-        const aSku = (a.sku || '').toLowerCase();
-        const bSku = (b.sku || '').toLowerCase();
-        const aBarcode = (a.barcode || '').toLowerCase();
-        const bBarcode = (b.barcode || '').toLowerCase();
-        const aName = a.name.toLowerCase();
-        const bName = b.name.toLowerCase();
-        const aExact = Number(aBarcode === normalizedQuery || aSku === normalizedQuery || aName === normalizedQuery);
-        const bExact = Number(bBarcode === normalizedQuery || bSku === normalizedQuery || bName === normalizedQuery);
-        if (aExact !== bExact) {
-          return bExact - aExact;
-        }
-        const aStarts = Number(aBarcode.startsWith(normalizedQuery) || aSku.startsWith(normalizedQuery) || aName.startsWith(normalizedQuery));
-        const bStarts = Number(bBarcode.startsWith(normalizedQuery) || bSku.startsWith(normalizedQuery) || bName.startsWith(normalizedQuery));
-        if (aStarts !== bStarts) {
-          return bStarts - aStarts;
-        }
-        return a.name.localeCompare(b.name);
-      })
-      .slice(0, 20);
-  }, [products, normalizedQuery, mode]);
+  const matchedProducts = products;
 
   const cartSubtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const cartDiscountTotal = cart.reduce((sum, item) => sum + item.discount, 0);

@@ -2845,6 +2845,181 @@ export async function createApp() {
     res.json({ id: info.lastInsertRowid });
   });
 
+  app.get("/api/pos/products", async (req, res) => {
+    const parsedBranchId = parsePositiveInt(req.query.branchId);
+    const queryText = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const mode = req.query.mode === "return" ? "return" : "sale";
+
+    if (!parsedBranchId) {
+      return res.status(400).json({ error: "Invalid branchId." });
+    }
+
+    if (useSupabaseBackend && supabaseAdmin) {
+      if (!queryText && mode === "sale") {
+        const { data, error } = await supabaseAdmin
+          .from("inventory")
+          .select(`
+            id,
+            product_id,
+            branch_id,
+            stock_level,
+            reorder_point,
+            mfg_date,
+            expiry_date,
+            products:products(id, name, category, barcode, price, cost, sku),
+            branches:branches(name)
+          `)
+          .eq("branch_id", parsedBranchId)
+          .gt("stock_level", 0)
+          .order("stock_level", { ascending: false })
+          .limit(20);
+
+        if (!error && data) {
+          return res.json(
+            (data as SupabaseInventoryRow[]).map((item) => {
+              const product = asSingle(item.products);
+              const branch = asSingle(item.branches);
+              return {
+                id: item.id,
+                product_id: item.product_id,
+                branch_id: item.branch_id,
+                stock_level: item.stock_level,
+                reorder_point: item.reorder_point ?? 10,
+                mfg_date: item.mfg_date,
+                expiry_date: item.expiry_date,
+                name: product?.name ?? null,
+                category: product?.category ?? null,
+                barcode: product?.barcode ?? null,
+                price: product?.price ?? null,
+                cost: product?.cost ?? null,
+                sku: product?.sku ?? null,
+                branch_name: branch?.name ?? null,
+              };
+            }),
+          );
+        }
+      }
+
+      let productQuery = supabaseAdmin
+        .from("products")
+        .select("id, name, category, barcode, price, cost, sku")
+        .order("name", { ascending: true })
+        .limit(queryText ? 20 : 30);
+
+      if (queryText) {
+        const escaped = queryText.replace(/[%_,]/g, "");
+        productQuery = productQuery.or(`name.ilike.%${escaped}%,category.ilike.%${escaped}%,sku.ilike.%${escaped}%,barcode.ilike.%${escaped}%`);
+      }
+
+      const { data: productRows, error: productError } = await productQuery;
+      if (!productError && productRows) {
+        const productIds = productRows.map((row) => Number(row.id));
+        const inventoryMap = new Map<number, { stock_level: number; reorder_point: number | null; mfg_date: string | null; expiry_date: string | null }>();
+
+        if (productIds.length > 0) {
+          const { data: inventoryRows } = await supabaseAdmin
+            .from("inventory")
+            .select("product_id, stock_level, reorder_point, mfg_date, expiry_date")
+            .eq("branch_id", parsedBranchId)
+            .in("product_id", productIds);
+
+          for (const row of inventoryRows ?? []) {
+            inventoryMap.set(Number(row.product_id), {
+              stock_level: Number(row.stock_level),
+              reorder_point: row.reorder_point === null ? 10 : Number(row.reorder_point),
+              mfg_date: row.mfg_date,
+              expiry_date: row.expiry_date,
+            });
+          }
+        }
+
+        return res.json(
+          productRows
+            .map((product) => {
+              const inventory = inventoryMap.get(Number(product.id));
+              return {
+                id: 0,
+                product_id: Number(product.id),
+                branch_id: parsedBranchId,
+                branch_name: null,
+                name: product.name,
+                category: product.category,
+                barcode: product.barcode,
+                price: Number(product.price),
+                cost: Number(product.cost),
+                sku: product.sku,
+                mfg_date: inventory?.mfg_date ?? null,
+                expiry_date: inventory?.expiry_date ?? null,
+                stock_level: inventory?.stock_level ?? 0,
+                reorder_point: inventory?.reorder_point ?? 10,
+              };
+            })
+            .filter((product) => mode === "return" || product.stock_level > 0),
+        );
+      }
+    }
+
+    if (!queryText && mode === "sale") {
+      const rows = db.prepare(`
+        SELECT
+          i.id,
+          i.product_id,
+          i.branch_id,
+          i.stock_level,
+          i.reorder_point,
+          i.mfg_date,
+          i.expiry_date,
+          p.name,
+          p.category,
+          p.barcode,
+          p.price,
+          p.cost,
+          p.sku,
+          b.name AS branch_name
+        FROM inventory i
+        JOIN products p ON p.id = i.product_id
+        JOIN branches b ON b.id = i.branch_id
+        WHERE i.branch_id = ? AND i.stock_level > 0
+        ORDER BY i.stock_level DESC, p.name ASC
+        LIMIT 20
+      `).all(parsedBranchId);
+      return res.json(rows);
+    }
+
+    const like = `%${queryText}%`;
+    const rows = db.prepare(`
+      SELECT
+        0 AS id,
+        p.id AS product_id,
+        ? AS branch_id,
+        COALESCE(i.stock_level, 0) AS stock_level,
+        COALESCE(i.reorder_point, 10) AS reorder_point,
+        i.mfg_date,
+        i.expiry_date,
+        p.name,
+        p.category,
+        p.barcode,
+        p.price,
+        p.cost,
+        p.sku,
+        b.name AS branch_name
+      FROM products p
+      LEFT JOIN inventory i ON i.product_id = p.id AND i.branch_id = ?
+      LEFT JOIN branches b ON b.id = ?
+      ${queryText ? "WHERE p.name LIKE ? OR p.category LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?" : ""}
+      ORDER BY p.name ASC
+      LIMIT ?
+    `).all(
+      parsedBranchId,
+      parsedBranchId,
+      parsedBranchId,
+      ...(queryText ? [like, like, like, like] : []),
+      queryText ? 20 : 30,
+    ) as Array<Record<string, unknown> & { stock_level: number }>;
+
+    return res.json(rows.filter((product) => mode === "return" || product.stock_level > 0));
+  });
+
   // 6. POS - Process Sale
   app.post("/api/pos/sale", async (req, res) => {
     const { branch_id, items, payment_method } = req.body; // items: [{ product_id, quantity, price }]
