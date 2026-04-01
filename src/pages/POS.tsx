@@ -44,6 +44,14 @@ export function POS() {
   const [expenseDescription, setExpenseDescription] = useState('');
   const [savingExpense, setSavingExpense] = useState(false);
 
+  const normalizeLocalizedNumber = (value: string) =>
+    value
+      .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+      .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+      .replace(/٫/g, '.')
+      .replace(/,/g, '')
+      .trim();
+
   const printReceipt = (receipt: ReceiptData) => {
     const popup = window.open('', '_blank', 'width=360,height=720');
     if (!popup) return;
@@ -256,7 +264,7 @@ export function POS() {
   };
 
   const setCartQuantity = (productId: number, value: string) => {
-    const parsed = Number(value);
+    const parsed = Number(normalizeLocalizedNumber(value));
     setCart((prev) =>
       prev.map((item) => {
         if (item.product_id !== productId) return item;
@@ -268,7 +276,7 @@ export function POS() {
   };
 
   const setReturnCartQuantity = (productId: number, value: string) => {
-    const parsed = Number(value);
+    const parsed = Number(normalizeLocalizedNumber(value));
     setReturnCart((prev) =>
       prev.map((item) => {
         if (item.product_id !== productId) return item;
@@ -279,7 +287,7 @@ export function POS() {
   };
 
   const setCartDiscount = (productId: number, value: string) => {
-    const parsed = Number(value);
+    const parsed = Number(normalizeLocalizedNumber(value));
     setCart((prev) =>
       prev.map((item) => {
         if (item.product_id !== productId) return item;
@@ -690,7 +698,10 @@ export function POS() {
                         ? setCartQuantity(item.product_id, e.target.value)
                         : setReturnCartQuantity(item.product_id, e.target.value)
                     }
-                    className="h-8 w-16 rounded-md border border-stone-200 bg-white px-2 text-center text-sm"
+                    inputMode="numeric"
+                    lang="en"
+                    dir="ltr"
+                    className="h-8 w-16 rounded-md border border-stone-200 bg-white px-2 text-center text-sm [font-variant-numeric:lining-nums_tabular-nums]"
                   />
                   <Button
                     variant="outline"
@@ -708,7 +719,10 @@ export function POS() {
                       step="0.01"
                       value={item.discount}
                       onChange={(e) => setCartDiscount(item.product_id, e.target.value)}
-                      className="h-8 w-24 rounded-md border border-stone-200 bg-white px-2 text-right text-sm"
+                      inputMode="decimal"
+                      lang="en"
+                      dir="ltr"
+                      className="h-8 w-24 rounded-md border border-stone-200 bg-white px-2 text-right text-sm [font-variant-numeric:lining-nums_tabular-nums]"
                       placeholder="Discount"
                     />
                   )}
