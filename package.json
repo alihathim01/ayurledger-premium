@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "supabase:sync": "tsx scripts/sync-sqlite-to-supabase.ts"
+    "supabase:sync": "tsx scripts/sync-sqlite-to-supabase.ts",
+    "admin:reset-password": "tsx scripts/reset-admin-password.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
