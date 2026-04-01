@@ -4,9 +4,9 @@ import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
-import db from "./src/db";
+import db from "./src/db.ts";
 import { GoogleGenAI } from "@google/genai";
-import { isSupabaseServerConfigured, supabaseAdmin } from "./src/lib/supabase-admin";
+import { isSupabaseServerConfigured, supabaseAdmin } from "./src/lib/supabase-admin.ts";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
