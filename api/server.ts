@@ -300,6 +300,7 @@ const verifyPassword = (password: string, stored: string) => {
 };
 
 const useSupabaseBackend = isSupabaseServerConfigured() && Boolean(supabaseAdmin);
+const hasSqliteFallback = Boolean(db);
 
 const asSingle = <T,>(value: T | T[] | null | undefined): T | null => {
   if (Array.isArray(value)) return value[0] ?? null;
@@ -396,6 +397,10 @@ const getMonthlySummarySupabase = async (month: string, branchId: number | null)
 };
 
 const ensureDefaultAdmin = () => {
+  if (!hasSqliteFallback) {
+    return;
+  }
+
   try {
     const hasUsers = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
     if (!hasUsers) return;
@@ -435,12 +440,19 @@ export async function createApp() {
       | { id: number; username: string; password_hash: string; role: string; is_active: number }
       | undefined;
 
+    let supabaseLookupFailed = false;
+
     if (useSupabaseBackend && supabaseAdmin) {
       const { data, error } = await supabaseAdmin
         .from("users")
         .select("id, username, password_hash, role, is_active")
         .eq("username", username)
         .maybeSingle();
+
+      if (error) {
+        console.error("[auth/login] Supabase lookup failed:", error.message);
+        supabaseLookupFailed = true;
+      }
 
       if (!error && data) {
         userRow = {
@@ -453,12 +465,21 @@ export async function createApp() {
       }
     }
 
-    if (!userRow) {
+    if (!userRow && hasSqliteFallback) {
       userRow = db
         .prepare("SELECT id, username, password_hash, role, is_active FROM users WHERE username = ?")
         .get(username) as
         | { id: number; username: string; password_hash: string; role: string; is_active: number }
         | undefined;
+    }
+
+    if (!userRow && !hasSqliteFallback) {
+      if (!useSupabaseBackend || !supabaseAdmin) {
+        return res.status(500).json({ error: "Server is missing Supabase configuration." });
+      }
+      if (supabaseLookupFailed) {
+        return res.status(500).json({ error: "Supabase login lookup failed." });
+      }
     }
 
     if (!userRow || userRow.is_active !== 1) {
