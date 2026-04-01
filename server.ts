@@ -11,6 +11,12 @@ import { isSupabaseServerConfigured, supabaseAdmin } from "./src/lib/supabase-ad
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
+const parseAllowedOrigins = () =>
+  (process.env.CORS_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
 type AuthUser = { id: number; username: string; role: string };
 type UserRole =
   | "admin"
@@ -424,6 +430,21 @@ const ensureDefaultAdmin = () => {
 
 export async function createApp() {
   const app = express();
+  const allowedOrigins = parseAllowedOrigins();
+
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && (allowedOrigins.length === 0 || allowedOrigins.includes(origin))) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    if (req.method === "OPTIONS") {
+      return res.status(204).end();
+    }
+    next();
+  });
 
   app.use(express.json());
   ensureDefaultAdmin();
@@ -4212,13 +4233,15 @@ export async function createApp() {
   });
 
   // --- Vite Middleware ---
+  const serveFrontend = process.env.SERVE_FRONTEND !== "false";
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (serveFrontend) {
     const distPath = path.resolve(__dirname, "dist");
     app.use(express.static(distPath));
     app.get(/^\/(?!api\/).*/, (_req, res) => {

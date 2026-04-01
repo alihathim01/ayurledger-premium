@@ -1,7 +1,7 @@
 const TOKEN_KEY = 'ayurledger_token';
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
 
-function withApiBase(path: string) {
+export function withApiBase(path: string) {
   if (!API_BASE_URL) {
     return path;
   }
