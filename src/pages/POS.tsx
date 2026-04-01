@@ -3,11 +3,31 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Plus, Minus, ShoppingCart, Trash2, Search, ScanBarcode, RotateCcw } from 'lucide-react';
 import { useStore } from '@/context/StoreContext';
+import { useAuth } from '@/context/AuthContext';
 import { InventoryItem, CartItem, SalesRecord } from '@/types';
 import { formatSAR } from '@/lib/currency';
 
+type ReceiptData = {
+  saleId: number;
+  branchName: string;
+  cashier: string;
+  paymentMethod: 'cash' | 'card';
+  issuedAt: string;
+  items: Array<{
+    name: string;
+    quantity: number;
+    price: number;
+    discount: number;
+    lineTotal: number;
+  }>;
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+};
+
 export function POS() {
   const { currentBranch } = useStore();
+  const { user } = useAuth();
   const [products, setProducts] = useState<InventoryItem[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [returnCart, setReturnCart] = useState<CartItem[]>([]);
@@ -23,6 +43,90 @@ export function POS() {
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseDescription, setExpenseDescription] = useState('');
   const [savingExpense, setSavingExpense] = useState(false);
+
+  const printReceipt = (receipt: ReceiptData) => {
+    const popup = window.open('', '_blank', 'width=360,height=720');
+    if (!popup) return;
+
+    const escapeHtml = (value: string) =>
+      value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const rows = receipt.items
+      .map(
+        (item) => `
+          <div class="item">
+            <div class="item-name">${escapeHtml(item.name)}</div>
+            <div class="item-meta">${item.quantity} x ${item.price.toFixed(2)}</div>
+            ${item.discount > 0 ? `<div class="item-meta">Discount: -${item.discount.toFixed(2)}</div>` : ''}
+            <div class="item-total">${item.lineTotal.toFixed(2)}</div>
+          </div>
+        `,
+      )
+      .join('');
+
+    popup.document.write(`
+      <html>
+        <head>
+          <title>Receipt #${receipt.saleId}</title>
+          <style>
+            @page { size: 80mm auto; margin: 4mm; }
+            body {
+              font-family: "Courier New", monospace;
+              width: 72mm;
+              margin: 0 auto;
+              color: #000;
+              font-size: 12px;
+              line-height: 1.35;
+            }
+            .center { text-align: center; }
+            .muted { color: #333; font-size: 11px; }
+            .rule { border-top: 1px dashed #000; margin: 8px 0; }
+            .item { padding: 6px 0; border-bottom: 1px dotted #bbb; }
+            .item-name { font-weight: bold; }
+            .item-meta { font-size: 11px; }
+            .item-total { text-align: right; font-weight: bold; }
+            .row {
+              display: flex;
+              justify-content: space-between;
+              gap: 8px;
+              margin: 2px 0;
+            }
+            .total {
+              font-size: 16px;
+              font-weight: bold;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="center">
+            <div style="font-size:16px;font-weight:bold;">${escapeHtml(receipt.branchName)}</div>
+            <div class="muted">Sales Receipt</div>
+          </div>
+          <div class="rule"></div>
+          <div class="row"><span>Bill #</span><span>${receipt.saleId}</span></div>
+          <div class="row"><span>Date</span><span>${escapeHtml(new Date(receipt.issuedAt).toLocaleString())}</span></div>
+          <div class="row"><span>Cashier</span><span>${escapeHtml(receipt.cashier)}</span></div>
+          <div class="row"><span>Payment</span><span>${escapeHtml(receipt.paymentMethod.toUpperCase())}</span></div>
+          <div class="rule"></div>
+          ${rows}
+          <div class="rule"></div>
+          <div class="row"><span>Subtotal</span><span>${receipt.subtotal.toFixed(2)}</span></div>
+          <div class="row"><span>Discount</span><span>-${receipt.discountTotal.toFixed(2)}</span></div>
+          <div class="row total"><span>Total</span><span>${receipt.total.toFixed(2)}</span></div>
+          <div class="rule"></div>
+          <div class="center muted">Thank you</div>
+        </body>
+      </html>
+    `);
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  };
 
   const getTodayIsoDate = () => {
     const now = new Date();
@@ -275,6 +379,23 @@ export function POS() {
 
     setLoading(true);
     try {
+      const receiptDraft = {
+        branchName: currentBranch.name,
+        cashier: user?.username || 'Cashier',
+        paymentMethod,
+        issuedAt: new Date().toISOString(),
+        items: cart.map((item) => ({
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price,
+          discount: item.discount,
+          lineTotal: item.price * item.quantity - item.discount,
+        })),
+        subtotal: cartSubtotal,
+        discountTotal: cartDiscountTotal,
+        total: cartTotal,
+      };
+
       const res = await fetch('/api/pos/sale', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -291,6 +412,11 @@ export function POS() {
       });
 
       if (res.ok) {
+        const data = await res.json();
+        printReceipt({
+          saleId: Number(data.saleId),
+          ...receiptDraft,
+        });
         setCart([]);
         setQuery('');
         setSearchMessage('Sale completed successfully.');
