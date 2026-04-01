@@ -1991,10 +1991,92 @@ export async function createApp() {
     return res.json({ success: true, id: result.lastInsertRowid });
   });
 
-  app.post("/api/products/bulk-upsert", (req, res) => {
+  app.post("/api/products/bulk-upsert", async (req, res) => {
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
     if (!rows) {
       return res.status(400).json({ error: "Invalid bulk payload." });
+    }
+
+    if (useSupabaseBackend && supabaseAdmin) {
+      try {
+        const { data: existingProducts, error: existingError } = await supabaseAdmin
+          .from("products")
+          .select("id, barcode, sku");
+
+        if (existingError) {
+          return res.status(500).json({ error: existingError.message });
+        }
+
+        const barcodeMap = new Map<string, number>();
+        const skuMap = new Map<string, number>();
+
+        for (const product of existingProducts ?? []) {
+          const barcode = typeof product.barcode === "string" ? product.barcode.trim() : "";
+          const sku = typeof product.sku === "string" ? product.sku.trim() : "";
+          const productId = Number(product.id);
+          if (barcode) barcodeMap.set(barcode, productId);
+          if (sku) skuMap.set(sku, productId);
+        }
+
+        let created = 0;
+        let updated = 0;
+        let skipped = 0;
+
+        for (const row of rows) {
+          const name = typeof row?.name === "string" ? row.name.trim() : "";
+          const category = typeof row?.category === "string" ? row.category.trim() : "";
+          const barcode = typeof row?.barcode === "string" ? row.barcode.trim() : "";
+          const sku = typeof row?.sku === "string" ? row.sku.trim() : "";
+          const cost = parseNonNegativeNumber(row?.cost);
+          const price = parseNonNegativeNumber(row?.price);
+
+          if (!name || !category || cost === null || price === null) {
+            skipped += 1;
+            continue;
+          }
+
+          const payload = {
+            name,
+            category,
+            barcode: barcode || null,
+            price: roundToCents(price),
+            cost: roundToCents(cost),
+            sku: sku || null,
+          };
+
+          const existingId =
+            (barcode ? barcodeMap.get(barcode) : null) ??
+            (sku ? skuMap.get(sku) : null) ??
+            null;
+
+          if (existingId) {
+            const { error } = await supabaseAdmin.from("products").update(payload).eq("id", existingId);
+            if (error) {
+              return res.status(500).json({ error: error.message });
+            }
+            updated += 1;
+            if (barcode) barcodeMap.set(barcode, existingId);
+            if (sku) skuMap.set(sku, existingId);
+          } else {
+            const { data, error } = await supabaseAdmin
+              .from("products")
+              .insert(payload)
+              .select("id")
+              .single();
+            if (error) {
+              return res.status(500).json({ error: error.message });
+            }
+            const newId = Number(data.id);
+            created += 1;
+            if (barcode) barcodeMap.set(barcode, newId);
+            if (sku) skuMap.set(sku, newId);
+          }
+        }
+
+        return res.json({ success: true, created, updated, skipped, total: rows.length });
+      } catch (error: any) {
+        return res.status(500).json({ error: error.message });
+      }
     }
 
     const findByBarcode = db.prepare("SELECT id FROM products WHERE barcode = ?");
