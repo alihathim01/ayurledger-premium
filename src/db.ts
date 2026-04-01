@@ -1,9 +1,22 @@
-import Database from 'better-sqlite3';
+import { createRequire } from 'module';
 
-const db = new Database('ayurledger.db');
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+const require = createRequire(import.meta.url);
 
+let db: any = null;
+
+try {
+  const Database = require('better-sqlite3');
+  db = new Database('ayurledger.db');
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+} catch (error) {
+  console.warn(
+    '[AyurLedger] SQLite fallback unavailable. Running with Supabase-only mode if configured.',
+    error instanceof Error ? error.message : error,
+  );
+}
+
+if (db) {
 db.exec(`
   CREATE TABLE IF NOT EXISTS branches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -424,6 +437,7 @@ if (branchCount.count === 0) {
   insertTx.run(mainBranch, 'expense', 'Utilities', 150.0, 'Electricity Bill', today);
   insertTx.run(secondBranch, 'expense', 'Rent', 1200.0, 'Monthly Shop Rent', today);
   console.log('Database seeded successfully.');
+}
 }
 
 export default db;
