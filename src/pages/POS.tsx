@@ -112,7 +112,7 @@ export function POS() {
             : item
         );
       }
-      return [...prev, { ...product, quantity: 1 }];
+      return [...prev, { ...product, quantity: 1, discount: 0 }];
     });
   };
 
@@ -130,7 +130,7 @@ export function POS() {
             : item
         );
       }
-      return [...prev, { ...product, quantity: 1 }];
+      return [...prev, { ...product, quantity: 1, discount: 0 }];
     });
   };
 
@@ -147,6 +147,41 @@ export function POS() {
           return { ...item, quantity: newQty };
         }
         return item;
+      })
+    );
+  };
+
+  const setCartQuantity = (productId: number, value: string) => {
+    const parsed = Number(value);
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.product_id !== productId) return item;
+        if (!Number.isFinite(parsed)) return item;
+        const nextQuantity = Math.min(item.stock_level, Math.max(1, Math.floor(parsed)));
+        return { ...item, quantity: nextQuantity };
+      })
+    );
+  };
+
+  const setReturnCartQuantity = (productId: number, value: string) => {
+    const parsed = Number(value);
+    setReturnCart((prev) =>
+      prev.map((item) => {
+        if (item.product_id !== productId) return item;
+        if (!Number.isFinite(parsed)) return item;
+        return { ...item, quantity: Math.max(1, Math.floor(parsed)) };
+      })
+    );
+  };
+
+  const setCartDiscount = (productId: number, value: string) => {
+    const parsed = Number(value);
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.product_id !== productId) return item;
+        if (!Number.isFinite(parsed)) return { ...item, discount: 0 };
+        const maxDiscount = item.price * item.quantity;
+        return { ...item, discount: Math.min(maxDiscount, Math.max(0, parsed)) };
       })
     );
   };
@@ -201,7 +236,9 @@ export function POS() {
       .slice(0, 20);
   }, [products, normalizedQuery, mode]);
 
-  const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const cartSubtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const cartDiscountTotal = cart.reduce((sum, item) => sum + item.discount, 0);
+  const cartTotal = cartSubtotal - cartDiscountTotal;
   const returnTotal = returnCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
   const handleSearchSubmit = (e: FormEvent) => {
@@ -247,6 +284,7 @@ export function POS() {
             product_id: item.product_id,
             quantity: item.quantity,
             price: item.price,
+            discount: item.discount,
           })),
           payment_method: paymentMethod,
         }),
@@ -501,7 +539,10 @@ export function POS() {
               >
                 <div className="flex-1">
                   <p className="font-medium text-sm text-stone-900">{item.name}</p>
-                  <p className="text-xs text-stone-500">{formatSAR(item.price)} x {item.quantity}</p>
+                  <p className="text-xs text-stone-500">
+                    {formatSAR(item.price)} x {item.quantity}
+                    {mode === 'sale' && item.discount > 0 ? ` | Discount ${formatSAR(item.discount)}` : ''}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
@@ -513,7 +554,18 @@ export function POS() {
                   >
                     <Minus className="h-3 w-3" />
                   </Button>
-                  <span className="text-sm font-medium w-4 text-center">{item.quantity}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={mode === 'sale' ? item.stock_level : undefined}
+                    value={item.quantity}
+                    onChange={(e) =>
+                      mode === 'sale'
+                        ? setCartQuantity(item.product_id, e.target.value)
+                        : setReturnCartQuantity(item.product_id, e.target.value)
+                    }
+                    className="h-8 w-16 rounded-md border border-stone-200 bg-white px-2 text-center text-sm"
+                  />
                   <Button
                     variant="outline"
                     size="icon"
@@ -523,6 +575,17 @@ export function POS() {
                   >
                     <Plus className="h-3 w-3" />
                   </Button>
+                  {mode === 'sale' && (
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={item.discount}
+                      onChange={(e) => setCartDiscount(item.product_id, e.target.value)}
+                      className="h-8 w-24 rounded-md border border-stone-200 bg-white px-2 text-right text-sm"
+                      placeholder="Discount"
+                    />
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -556,10 +619,27 @@ export function POS() {
               </Button>
             </div>
           </div>
-          <div className="flex justify-between items-center mb-4">
-            <span className="text-stone-500">{mode === 'sale' ? 'Total' : 'Return Total'}</span>
-            <span className="text-2xl font-bold text-stone-900">{formatSAR(mode === 'sale' ? cartTotal : returnTotal)}</span>
-          </div>
+          {mode === 'sale' ? (
+            <>
+              <div className="flex justify-between items-center text-sm mb-1">
+                <span className="text-stone-500">Subtotal</span>
+                <span className="text-stone-900">{formatSAR(cartSubtotal)}</span>
+              </div>
+              <div className="flex justify-between items-center text-sm mb-1">
+                <span className="text-stone-500">Discount</span>
+                <span className="text-stone-900">-{formatSAR(cartDiscountTotal)}</span>
+              </div>
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-stone-500">Total</span>
+                <span className="text-2xl font-bold text-stone-900">{formatSAR(cartTotal)}</span>
+              </div>
+            </>
+          ) : (
+            <div className="flex justify-between items-center mb-4">
+              <span className="text-stone-500">Return Total</span>
+              <span className="text-2xl font-bold text-stone-900">{formatSAR(returnTotal)}</span>
+            </div>
+          )}
           {mode === 'sale' ? (
             <Button
               className="w-full bg-emerald-700 hover:bg-emerald-800 text-white h-12 text-lg"

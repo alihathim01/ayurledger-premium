@@ -107,6 +107,7 @@ export interface SalesRecordSummary {
 
 export interface CartItem extends InventoryItem {
   quantity: number;
+  discount: number;
 }
 
 export interface StockAdjustment {

@@ -40,6 +40,7 @@ type PosItemInput = {
   product_id: number;
   quantity: number;
   price: number;
+  discount: number;
 };
 
 type PosReturnInput = {
@@ -2862,10 +2863,16 @@ export async function createApp() {
       const productId = parsePositiveInt(rawItem?.product_id);
       const quantity = parsePositiveInt(rawItem?.quantity);
       const price = parseNonNegativeNumber(rawItem?.price);
-      if (!productId || !quantity || price === null) {
+      const discount = rawItem?.discount === undefined || rawItem?.discount === null ? 0 : parseNonNegativeNumber(rawItem?.discount);
+      if (!productId || !quantity || price === null || discount === null) {
         return res.status(400).json({ error: "Invalid sale item data." });
       }
-      normalizedItems.push({ product_id: productId, quantity, price: roundToCents(price) });
+      const roundedPrice = roundToCents(price);
+      const roundedDiscount = roundToCents(discount);
+      if (roundedDiscount > roundToCents(roundedPrice * quantity)) {
+        return res.status(400).json({ error: "Discount cannot exceed item total." });
+      }
+      normalizedItems.push({ product_id: productId, quantity, price: roundedPrice, discount: roundedDiscount });
     }
 
     const date = getRecordBusinessDate(openRecord);
@@ -2873,9 +2880,10 @@ export async function createApp() {
 
     if (useSupabaseBackend && supabaseAdmin) {
       normalizedItems.forEach((item) => {
-        totalCents += toCents(item.price) * item.quantity;
+        totalCents += toCents(item.price) * item.quantity - toCents(item.discount);
       });
       const total = fromCents(totalCents);
+      const discountTotal = roundToCents(normalizedItems.reduce((sum, item) => sum + item.discount, 0));
 
       for (const item of normalizedItems) {
         const { data: stockRow, error } = await supabaseAdmin
@@ -2900,6 +2908,7 @@ export async function createApp() {
           record_id: openRecord.id,
           total_amount: total,
           payment_method: normalizedPaymentMethod,
+          discount_amount: discountTotal,
           date,
         })
         .select("id")
@@ -2913,6 +2922,7 @@ export async function createApp() {
             product_id: item.product_id,
             quantity: item.quantity,
             price_at_sale: item.price,
+            discount_amount: item.discount,
           });
           const { data: stockRow } = await supabaseAdmin
             .from("inventory")
@@ -2945,16 +2955,17 @@ export async function createApp() {
     const createSale = db.transaction(() => {
       // Calculate total
       normalizedItems.forEach((item) => {
-        totalCents += toCents(item.price) * item.quantity;
+        totalCents += toCents(item.price) * item.quantity - toCents(item.discount);
       });
       const total = fromCents(totalCents);
+      const discountTotal = roundToCents(normalizedItems.reduce((sum, item) => sum + item.discount, 0));
 
       // 1. Create Sale Record
-      const saleResult = db.prepare('INSERT INTO sales (branch_id, record_id, total_amount, payment_method, date) VALUES (?, ?, ?, ?, ?)').run(parsedBranchId, openRecord.id, total, normalizedPaymentMethod, date);
+      const saleResult = db.prepare('INSERT INTO sales (branch_id, record_id, total_amount, payment_method, discount_amount, date) VALUES (?, ?, ?, ?, ?, ?)').run(parsedBranchId, openRecord.id, total, normalizedPaymentMethod, discountTotal, date);
       const saleId = saleResult.lastInsertRowid;
 
       // 2. Add Sale Items & Update Inventory
-      const insertItem = db.prepare('INSERT INTO sale_items (sale_id, product_id, quantity, price_at_sale) VALUES (?, ?, ?, ?)');
+      const insertItem = db.prepare('INSERT INTO sale_items (sale_id, product_id, quantity, price_at_sale, discount_amount) VALUES (?, ?, ?, ?, ?)');
       const updateStock = db.prepare('UPDATE inventory SET stock_level = stock_level - ? WHERE product_id = ? AND branch_id = ?');
       const getStock = db.prepare('SELECT stock_level FROM inventory WHERE product_id = ? AND branch_id = ?');
 
@@ -2966,7 +2977,7 @@ export async function createApp() {
         if (stockRow.stock_level < item.quantity) {
           throw new Error(`Insufficient stock for product ${item.product_id}. Available: ${stockRow.stock_level}, requested: ${item.quantity}.`);
         }
-        insertItem.run(saleId, item.product_id, item.quantity, item.price);
+        insertItem.run(saleId, item.product_id, item.quantity, item.price, item.discount);
         updateStock.run(item.quantity, item.product_id, parsedBranchId);
       });
 
